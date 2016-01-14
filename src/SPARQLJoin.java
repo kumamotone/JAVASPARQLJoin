@@ -44,11 +44,127 @@ import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.RunnableFuture;
 
+class Relation {
+    String[] attr;
+    ArrayList<String[]> table;
+
+    static String readFile(String path) {
+        byte[] encoded = {};
+        try {
+            encoded = Files.readAllBytes(Paths.get(path));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return new String(encoded, StandardCharsets.UTF_8);
+    }
+
+    static ArrayList<String> split(char s[], char delim) {
+        ArrayList<String> res = new ArrayList<String>();
+        int j = 0;
+        for (int i = 0; i < s.length; i++) {
+            if (s[i] == delim) {
+                res.add(new String(s, j, i - j));
+                j = i + 1;
+            }
+        }
+        return res;
+    }
+
+    // from csv
+    Relation(char s[], boolean removeQuates) {
+        ArrayList<String> rows = split(s, '\n');
+        table = new ArrayList<String[]>();
+        int m = 0;
+        for (int i = 0; i < rows.size(); i++) {
+            ArrayList<String> cols = split(rows.get(i).toCharArray(), ',');
+            m = cols.size();
+            String[] target = new String[m];
+            for (int j = 0; j < m; j++) {
+                String c = cols.get(j);
+                if (removeQuates && c.length() >= 2 && c.charAt(0) == '"' && c.charAt(c.length() - 1) == '"') {
+                    c = c.substring(1, c.length() - 1);
+                }
+                target[j] = c;
+            }
+            if (i == 0) {
+                attr = target;
+            } else {
+                if(m < attr.length) continue;
+                table.add(target);
+            }
+        }
+    }
+
+    // from hash join between two relations
+    Relation(Relation R, Relation S, String keyR, String keyS) {
+        if (R.table.size() > S.table.size()) {
+            Relation tmp;
+            tmp = R;
+            R = S;
+            S = tmp;
+
+            String tmp2;
+            tmp2 = keyR;
+            keyR = keyS;
+            keyS = tmp2;
+        }
+
+        int r = -1, s = -1;
+        for (int i = 0; i < R.attr.length; i++) {
+            if (R.attr[i].equals(keyR)) r = i;
+        }
+        for (int i = 0; i < S.attr.length; i++) {
+            if (S.attr[i].equals(keyS)) s = i;
+        }
+        if (r == -1 || s == -1) {
+            attr = new String[0];
+            table = new ArrayList<String[]>();
+            return;
+        }
+
+        HashMap<String, ArrayList<Integer>> hashtable = new HashMap<String, ArrayList<Integer>>();
+        for (int i = 0; i < S.table.size(); i++) {
+            if (!hashtable.containsKey(S.table.get(i)[s])) {
+                hashtable.put(S.table.get(i)[s], new ArrayList<Integer>());
+            }
+            hashtable.get(S.table.get(i)[s]).add(i);
+        }
+
+        int n = R.attr.length + S.attr.length;
+        attr = new String[n];
+        for (int k = 0; k < R.attr.length; k++) {
+            attr[k] = R.attr[k];
+        }
+        for (int k = 0; k < S.attr.length; k++) {
+            attr[R.attr.length + k] = S.attr[k];
+        }
+
+        table = new ArrayList<String[]>();
+
+        for (int i = 0; i < R.table.size(); i++) {
+            if (!hashtable.containsKey(R.table.get(i)[r])) continue;
+            ArrayList<Integer> target = hashtable.get(R.table.get(i)[r]);
+            for (Integer j : target) {
+                String[] vals = new String[n];
+                for (int k = 0; k < R.attr.length; k++) {
+                    String[] ppp = R.table.get(i);
+                    vals[k] = ppp[k];
+                    // System.out.println(vals.length + " " + ppp.length + " " + k + " " + R.attr.length);
+                }
+                for (int k = 0; k < S.attr.length; k++) {
+                    vals[R.attr.length + k] = S.table.get(j)[k];
+                }
+                table.add(vals);
+            }
+        }
+    }
+}
+
 /**
  * 色々やる便利なクラス
  */
 class Benry {
-    static JsonArray QueryJSON(String endpoint , String filename) {
+    static Relation QueryJSON(String endpoint , String filename) {
         //StringBuilderを使って可変長の文字列を扱う
         //StringBuilderの使い方：http://www.javadrive.jp/start/stringbuilder/index1.html
         StringBuilder builder = new StringBuilder();
@@ -61,7 +177,7 @@ class Benry {
 
         List<NameValuePair> params = new LinkedList<NameValuePair>();
         params.add(new BasicNameValuePair("query", queryString));
-        params.add(new BasicNameValuePair("format", "application/sparql-results+json"));
+        params.add(new BasicNameValuePair("format", "text/csv"));
         String qs = URLEncodedUtils.format(params, "utf-8");
         requestUrl.append("?");
         requestUrl.append(qs);
@@ -80,14 +196,21 @@ class Benry {
             if (statusCode == 200) {
                 //HTTPレスポンスが200よりページは存在する
                 //レスポンスからHTTPエンティティ（実体）を生成
-                long start = System.nanoTime();
+
                 HttpEntity entity = response.getEntity();
                 String retSrc = EntityUtils.toString(entity);
-                JsonValue value = Json.parse(retSrc);
-                // JSONObject jsonobject = new JSONObject(retSrc);
+                long start = System.nanoTime();
+                Relation res = new Relation(retSrc.toCharArray(), true);
                 long end = System.nanoTime();
                 System.out.printf("convert: %f",((end - start) / 1000000f));
-                return value.asObject().get("results").asObject().get("bindings").asArray();
+                return res;
+        //        return new JsonArray();
+    //            System.out.println("parse start");
+  //              JsonValue value = Json.parse(retSrc);
+//                System.out.println("parse end");
+                // JSONObject jsonobject = new JSONObject(retSrc);
+
+                //return value.asObject().get("results").asObject().get("bindings").asArray();
                 //return getJSONObject("results").getJSONArray("bindings");
                 //HTTPエンティティからコンテント（中身）を生成
                 //InputStream content = entity.getContent();
@@ -157,7 +280,7 @@ class Benry {
         HashMap<String,ArrayList<JsonObject>> hashtable = new HashMap<String,ArrayList<JsonObject>>();
 
         for (int i = 0; i < R.size(); i++) {
-            JsonObject r = R.get(i).asObject();
+                JsonObject r = R.get(i).asObject();
             String rkey = r.get(X).asObject().get("value").asString(); // R.getJSONObject(i).getString(X);
             if(!hashtable.containsKey(rkey.toString())) {
                 ArrayList<JsonObject> list = new ArrayList<JsonObject>();
@@ -216,21 +339,14 @@ class ViewInfo implements Runnable {
     private String queryString;
     public boolean flag;
 
-    public JsonArray getResult() {
+    public Relation getResult() {
         return result;
     }
 
-    private JsonArray result;
+    private Relation result;
 
     Thread thread;
 
-    /**
-     * コンストラクタ
-     * @param viewname
-     * @param endpoint
-     * @param filename
-     *
-     */
     public ViewInfo(String viewname, String endpoint, String filename) {
         // パラメータをセット
         this.viewname = viewname;
@@ -254,10 +370,12 @@ class ViewInfo implements Runnable {
         ViewInfo product = new ViewInfo("product", ENDPOINT30, "/Users/kumamoto/new/SPARQLJoin/viewqueries/product.sparql");
         ViewInfo feature = new ViewInfo("feature", ENDPOINT22, "/Users/kumamoto/new/SPARQLJoin/viewqueries/feature.sparql");
         ViewInfo review = new ViewInfo("review", ENDPOINT30, "/Users/kumamoto/new/SPARQLJoin/viewqueries/review.sparql");
+        ViewInfo person = new ViewInfo("person", ENDPOINT22, "/Users/kumamoto/new/SPARQLJoin/viewqueries/person.sparql");
         HashMap<String,ViewInfo> ret = new HashMap<String,ViewInfo>();
+        ret.put(review.viewname, review);
         ret.put(product.viewname, product);
         ret.put(feature.viewname, feature);
-        ret.put(review.viewname, review);
+        ret.put(person.viewname, person);
         return ret;
     }
 
@@ -270,7 +388,7 @@ class ViewInfo implements Runnable {
 
 
         this.result = Benry.QueryJSON(this.endpoint, this.filename);
-        System.out.println(this.viewname + ".length \t" + this.getResult().size());
+        System.out.println(this.viewname + ".length \t" + this.getResult().table.size());
 
         long end = System.nanoTime();
         System.out.println("Arrived"+this.viewname+"," + (end - start) / 1000000f);
@@ -288,16 +406,15 @@ public class SPARQLJoin {
     public static void main(String[] args) throws Exception {
         long スタート = System.nanoTime();
         String[][] plan = {
-
                 {"product", "prdct", "review", "rvwfr"}
                 ,
+                {"review", "rvwprsn", "person", "prsn"}
+                ,
                 {"product", "prdctft", "feature", "ft"}
-
 
         };
 
         HashMap<String,ViewInfo> viewinfos = ViewInfo.ViewInfoFactory();
-
 
         while(!viewinfos.get(plan[0][0]).flag || !viewinfos.get(plan[0][2]).flag) {
             //System.out.print("w");
@@ -305,19 +422,29 @@ public class SPARQLJoin {
         }
 
         long start = System.nanoTime();
-        JsonArray result = Benry.hashJoinJSONArrays(viewinfos.get(plan[0][0]).getResult(), viewinfos.get(plan[0][2]).getResult(), plan[0][1],plan[0][3]);
+//        JsonArray result = Benry.hashJoinJSONArrays(viewinfos.get(plan[0][0]).getResult(), viewinfos.get(plan[0][2]).getResult(), plan[0][1],plan[0][3]);
+        Relation result = new Relation(viewinfos.get(plan[0][0]).getResult(), viewinfos.get(plan[0][2]).getResult(), plan[0][1],plan[0][3]);
         long end = System.nanoTime();
-        System.out.printf("%s vs %s, %f", plan[0][0], plan[0][2] ,((end - start) / 1000000f));
+        System.out.printf("%s vs %s, %f\n", plan[0][0], plan[0][2] ,((end - start) / 1000000f));
         while(!viewinfos.get(plan[1][0]).flag || !viewinfos.get(plan[1][2]).flag) {
             Thread.sleep(30);
         }
 
         start = System.nanoTime();
-        JsonArray result2 = Benry.hashJoinJSONArrays(result , viewinfos.get(plan[1][2]).getResult(),  plan[1][1],plan[1][3]);
+//        JsonArray result2 = Benry.hashJoinJSONArrays(result , viewinfos.get(plan[1][2]).getResult(),  plan[1][1],plan[1][3]);
+        Relation result2 = new Relation(result, viewinfos.get(plan[1][2]).getResult(),  plan[1][1],plan[1][3]);
         end = System.nanoTime();
-        System.out.printf("%s vs %s, %f", plan[1][0], plan[1][2] ,((end - start) / 1000000f));
+        System.out.printf("%s vs %s, %f\n", plan[1][0], plan[1][2] ,((end - start) / 1000000f));
+
+
+        start = System.nanoTime();
+//        JsonArray result2 = Benry.hashJoinJSONArrays(result , viewinfos.get(plan[1][2]).getResult(),  plan[1][1],plan[1][3]);
+        Relation result3 = new Relation(result2, viewinfos.get(plan[2][2]).getResult(),  plan[2][1],plan[2][3]);
+        end = System.nanoTime();
+        System.out.printf("%s vs %s, %f\n", plan[2][0], plan[2][2] ,((end - start) / 1000000f));
+
 
         long 真end = System.nanoTime();
-        System.out.printf("total, %f",((真end - スタート) / 1000000f));
+        System.out.printf("total, %f\n",((真end - スタート) / 1000000f));
     }
 }
